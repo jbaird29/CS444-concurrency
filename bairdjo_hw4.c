@@ -55,6 +55,7 @@ void init_pc(struct PC_Buffer *buff) {
     memset(buff->array, -1, PC_BUFFER_LEN);
 }
 
+// closes all semaphores
 void destroy_pc(struct PC_Buffer *buff) {
     if(sem_close(buff->full_spots) == -1)
         fprintf(stderr, "Error in sem_close full_spots: %s\n", strerror(errno));
@@ -70,7 +71,7 @@ void destroy_pc(struct PC_Buffer *buff) {
         fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_MUTEX_SEM, strerror(errno));
 }
 
-// Given an integer and a pc_buffer, puts the int into buffer
+// puts the value onto the queue, in FIFO order
 void pc_put(int val, struct PC_Buffer *buff) {
     sem_wait(buff->empty_spots);  // decrement # of empty spots, or block until one becomes available
     sem_wait(buff->mutex);  // acquire mutex to modify the buffer
@@ -81,6 +82,7 @@ void pc_put(int val, struct PC_Buffer *buff) {
     sem_post(buff->full_spots);  // increment # of full spots
 }
 
+// gets the value from the queue, in FIFO order
 int pc_get(struct PC_Buffer *buff) {
     int val;
     sem_wait(buff->full_spots);  // decrement # of full spots, or block until one becomes available
@@ -93,64 +95,64 @@ int pc_get(struct PC_Buffer *buff) {
     return val;
 }
 
+// arguments for the thread start functions
 struct pc_thread_args {
     int thread_id;
     int producer_loops;
     int consumer_loops;
 };
 
+// start function for queue producer threads
 void *do_producer_work(void *arg) {
     int val;
     struct pc_thread_args *args = (struct pc_thread_args *)arg;
     for (int i = 0; i < args->producer_loops; i++) {
-        printf("producer %d sleeping...\n", args->thread_id);
-        fflush(stdout);
         sleep(rand() % 3);  // sleep between 0 and 2 seconds
-        printf("producer %d awake...\n", args->thread_id);
-        fflush(stdout);
-        val = (args->thread_id * 1000) + i + 1;
+        val = (args->thread_id * 1000) + i + 1;  // ie: 9012 represents 12th item produced by thread #9
         pc_put(val, &pc_buffer);
         printf("producer %d put:     %d\n", args->thread_id, val);
-        fflush(stdout);
+        fflush(stdout);  // immediately flush the output; occasionally there is still a lag though
     }
     return NULL;
 }
 
+// start function for queue consumer thread
 void *do_consumer_work(void *arg) {
     struct pc_thread_args *args = (struct pc_thread_args *)arg;
     int val;
     for (int i = 0; i < args->consumer_loops; i++) {
-        printf("consumer %d sleeping...\n", args->thread_id);
-        fflush(stdout);
         sleep(rand() % 3);  // sleep between 0 and 2 seconds
-        printf("consumer %d awake...\n", args->thread_id);
-        fflush(stdout);
         val = pc_get(&pc_buffer);
         printf("consumer %d got:           %d\n", args->thread_id, val);
-        fflush(stdout);
+        fflush(stdout);  // immediately flush the output; occasionally there is still a lag though
     }
     return NULL;
 }
 
+// initializes the producer consumer thread arguments
 void init_pc_thread_args(struct pc_thread_args *args, int id, int producer_loops, int consumer_loops) {
     args->thread_id = id;
     args->producer_loops = producer_loops;
     args->consumer_loops = consumer_loops;
 }
 
+// run the producer consumer queue simulation
 int run_producer_consumer(int producer_count, int consumer_count) {
     printf("producers: %d consumers: %d\n", producer_count, consumer_count);
+    // initialize the simulation arguments
     srand(time(NULL));
     init_pc(&pc_buffer);
     pthread_t producer_threads[producer_count];
     pthread_t consumer_threads[consumer_count];
     int total_threads = producer_count > consumer_count ? producer_count : consumer_count;
     struct pc_thread_args all_args[total_threads];
+    // create all the threads
     for (int i = 0; i < total_threads; i++) {
         init_pc_thread_args(&all_args[i], i + 1, consumer_count * 3, producer_count * 3);
         if(i < producer_count) pthread_create(&producer_threads[i], NULL, do_producer_work, &all_args[i]);
         if(i < consumer_count) pthread_create(&consumer_threads[i], NULL, do_consumer_work, &all_args[i]);
     }
+    // join all the threads
     for (int i = 0; i < total_threads; i++) {
         if(i < producer_count) pthread_join(producer_threads[i], NULL);
         if(i < consumer_count) pthread_join(consumer_threads[i], NULL);
