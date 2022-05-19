@@ -23,7 +23,13 @@
 
 extern int errno;
 
+
+// --------------------------------------------------------------------------------------------------------------------
 // Producer Consumer Problem ----------------------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
+
+// SOURCE: Adapted from Operating Systems: Three Easy Pieces pages 400
+// DATE: 5/19/2022
 
 // producer consumer buffer and associated values
 struct PC_Buffer {
@@ -41,14 +47,20 @@ struct PC_Buffer pc_buffer;
 // given a pc_buffer, initializes its data members
 void init_pc(struct PC_Buffer *buff) {
     buff->full_spots = sem_open(PC_FULL_SPOTS_SEM, O_CREAT | O_EXCL, 0770, 0);  // # of full spots = zero
-    if(buff->full_spots == SEM_FAILED)
+    if(buff->full_spots == SEM_FAILED) {
         fprintf(stderr, "Error in sem_open %s: %s\n", PC_FULL_SPOTS_SEM, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
     buff->empty_spots = sem_open(PC_EMPTY_SPOTS_SEM, O_CREAT | O_EXCL, 0770, PC_BUFFER_LEN);  // empty spots = buff len
-    if(buff->empty_spots == SEM_FAILED)
+    if(buff->empty_spots == SEM_FAILED) {
         fprintf(stderr, "Error in sem_open %s: %s\n", PC_EMPTY_SPOTS_SEM, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
     buff->mutex = sem_open(PC_MUTEX_SEM, O_CREAT | O_EXCL, 0770, 1);  // binary semaphore (mutex)
-    if(buff->mutex == SEM_FAILED)
+    if(buff->mutex == SEM_FAILED) {
         fprintf(stderr, "Error in sem_open %s: %s\n", PC_MUTEX_SEM, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
     buff->put_index = 0;
     buff->get_index = 0;
     buff->count = 1;
@@ -57,18 +69,30 @@ void init_pc(struct PC_Buffer *buff) {
 
 // closes all semaphores
 void destroy_pc(struct PC_Buffer *buff) {
-    if(sem_close(buff->full_spots) == -1)
+    if(sem_close(buff->full_spots) == -1) {
         fprintf(stderr, "Error in sem_close full_spots: %s\n", strerror(errno));
-    if(sem_close(buff->empty_spots) == -1)
+        exit(EXIT_FAILURE);
+    }
+    if(sem_close(buff->empty_spots) == -1) {
         fprintf(stderr, "Error in sem_close empty_spots: %s\n", strerror(errno));
-    if(sem_close(buff->mutex) == -1)
+        exit(EXIT_FAILURE);
+    }
+    if(sem_close(buff->mutex) == -1) {
         fprintf(stderr, "Error in sem_close mutex: %s\n", strerror(errno));
-    if(sem_unlink(PC_FULL_SPOTS_SEM) == -1)
+        exit(EXIT_FAILURE);
+    }
+    if(sem_unlink(PC_FULL_SPOTS_SEM) == -1) {
         fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_FULL_SPOTS_SEM, strerror(errno));
-    if(sem_unlink(PC_EMPTY_SPOTS_SEM) == -1)
+        exit(EXIT_FAILURE);
+    }
+    if(sem_unlink(PC_EMPTY_SPOTS_SEM) == -1) {
         fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_EMPTY_SPOTS_SEM, strerror(errno));
-    if(sem_unlink(PC_MUTEX_SEM) == -1)
+        exit(EXIT_FAILURE);
+    }
+    if(sem_unlink(PC_MUTEX_SEM) == -1) {
         fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_MUTEX_SEM, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
 }
 
 // puts the value onto the queue, in FIFO order
@@ -138,7 +162,7 @@ void init_pc_thread_args(struct pc_thread_args *args, int id, int producer_loops
 
 // run the producer consumer queue simulation
 int run_producer_consumer(int producer_count, int consumer_count) {
-    printf("producers: %d consumers: %d\n", producer_count, consumer_count);
+    printf("Running Producer/Consumer simulation with %d producers, %d consumers.\n\n", producer_count, consumer_count);
     // initialize the simulation arguments
     srand(time(NULL));
     init_pc(&pc_buffer);
@@ -162,16 +186,111 @@ int run_producer_consumer(int producer_count, int consumer_count) {
 }
 
 
-// Dining Philosopher's Problem --------------------------------------------------------------------------------------
 
-// OSTEP pdf page 441
+// --------------------------------------------------------------------------------------------------------------------
+// Dining Philosopher's Problem --------------------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
+
+// SOURCE: Adapted from Operating Systems: Three Easy Pieces pages 403+
+// DATE: 5/19/2022
+
+// semaphore values
+sem_t *forks[5];  // semaphores representing the five forks
+char *fork_sems[5] = {"/fork_sem0", "/fork_sem1", "/fork_sem2", "/fork_sem3", "/fork_sem4"}; // semaphore names
+
+void init_fork_semaphores() {
+    for(int i = 0; i < 5; i++) {
+        forks[i] = sem_open(fork_sems[i], O_CREAT | O_EXCL, 0770, 1);  // # of full spots = zero
+        if(forks[i] == SEM_FAILED) {
+            fprintf(stderr, "Error in sem_open %s: %s\n", fork_sems[i], strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+void destroy_fork_semaphores() {
+    for(int i = 0; i < 5; i++) {
+        if(sem_close(forks[i]) == -1) {
+            fprintf(stderr, "Error in sem_close %s: %s\n", fork_sems[i], strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+        if(sem_unlink(fork_sems[i]) == -1) {
+            fprintf(stderr, "Error in sem_unlink %s: %s\n", fork_sems[i], strerror(errno));
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+// functions to get the left / right fork from a given philosopher
+int left(int p) { return p; }
+int right(int p) { return (p + 1) % 5; }
+
+// functions to acquire and put down the fork semaphores on either side of a philosopher
+void get_forks(int p) {
+    // to prevent deadlock - need at least one philosopher to acquire forks in different order
+    printf("Philosopher %d is acquiring forks...\n", p);
+    fflush(stdout);
+    if(p == 4) {
+        sem_wait(forks[right(p)]);
+        sem_wait(forks[left(p)]);
+    } else {
+        sem_wait(forks[left(p)]);
+        sem_wait(forks[right(p)]);
+    }
+}
+
+void put_forks(int p) {
+    sem_post(forks[left(p)]);
+    sem_post(forks[right(p)]);
+}
+
+// think and eat are simulating by sleeping between 0 and 3 seconds
+void think(int p) {
+    printf("Philosopher %d is thinking...\n", p);
+    fflush(stdout);
+    sleep(rand() % 5);
+}
+void eat(int p) {
+    printf("Philosopher %d is eating...\n", p);
+    fflush(stdout);
+    sleep(rand() % 5);
+}
+
+// start function for the philosopher threads
+void *do_philosopher_work(void *arg) {
+    int p = *(int *)arg;
+    for(int i = 0; i < 5; i++) {
+        think(p);
+        get_forks(p);
+        eat(p);
+        put_forks(p);
+    }
+    return NULL;
+}
+
+// run the dining philosopher simulation
 int run_dining_philosophers() {
-    printf("Diners!");
+    printf("Running Dining Philosopher's simulation. Each will eat 5 times before ending.\n\n");
+    init_fork_semaphores();
+    pthread_t philosophers[5];
+    // create all the threads
+    int p_index[5] = {0, 1, 2, 3, 4};
+    for (int i = 0; i < 5; i++) {
+        pthread_create(&philosophers[i], NULL, do_philosopher_work, &p_index[i]);
+    }
+    // join all the threads
+    for (int i = 0; i < 5; i++) {
+        pthread_join(philosophers[i], NULL);
+    }
+    destroy_fork_semaphores();
     return EXIT_SUCCESS;
 }
 
 
+
+// --------------------------------------------------------------------------------------------------------------------
 // Brew Master's Problem --------------------------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
 
 int run_brew_master() {
     printf("Brew Masters!");
@@ -179,7 +298,10 @@ int run_brew_master() {
 }
 
 
+
+// --------------------------------------------------------------------------------------------------------------------
 // Main function ----------------------------------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
 
 int exit_and_print_instructions() {
     printf("%s", INSTRUCTIONS);
