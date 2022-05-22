@@ -216,16 +216,16 @@ void put_forks(int p) {
     sem_post(forks[right(p)]);
 }
 
-// think and eat are simulating by sleeping between 0 and 3 seconds
+// think and eat are simulating by sleeping
 void think(int p) {
     printf("Philosopher %d is thinking...\n", p);
     fflush(stdout);
-    sleep(rand() % 5);
+    sleep((rand() % 20) + 1);  // Thinking takes a random amount of time in the range of 1-20 seconds.
 }
 void eat(int p) {
     printf("Philosopher %d is eating...\n", p);
     fflush(stdout);
-    sleep(rand() % 5);
+    sleep((rand() % 8) + 2);  // Eating takes a random amount of time in the range of 2-9 seconds.
 }
 
 // start function for the philosopher threads
@@ -263,6 +263,9 @@ int run_dining_philosophers() {
 // --------------------------------------------------------------------------------------------------------------------
 // Brew Master's Problem ----------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
+
+// ADAPTED FROM: The Little Book of Semaphores  DATE: 5/22/2022
+// URL: https://www.greenteapress.com/semaphores/LittleBookOfSemaphores.pdf
 
 // necessary semaphores for condition signalling
 sem_t *agentSem;
