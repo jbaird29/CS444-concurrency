@@ -3,23 +3,19 @@
 #include <string.h>
 #include <time.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include <assert.h>
 #include <errno.h>
 
-#define PC_BUFFER_LEN 10
-#define PC_FULL_SPOTS_SEM "/pc_full_spots_sem3"
-#define PC_EMPTY_SPOTS_SEM "/pc_empty_spots_sem3"
-#define PC_MUTEX_SEM "/pc_mutex_sem3"
 #define INSTRUCTIONS "Instructions:\n\
 -p: run the producer/consumer problem\n\
   -n {N}: number of producers (required if using -p)\n\
   -c {C}: number of consumers (required if using -p)\n\
 -d: run the dining philosopher's problem\n\
 -b: run the potion brewers problem\n"
+
+#define PC_BUFFER_LEN 10
 
 #define RESOURCE_COUNT 3
 #define RESOURCE_TOTAL ((RESOURCE_COUNT * (RESOURCE_COUNT-1)) / 2)  // 0 + 1 + 2 = 3 total
@@ -44,8 +40,10 @@ void destroy_sem(sem_t *semaphore, char *name) {
     }
 }
 
+
+
 // --------------------------------------------------------------------------------------------------------------------
-// Producer Consumer Problem ----------------------------------------------------------------------------------------
+// Producer Consumer Problem ------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 // SOURCE: Adapted from Operating Systems: Three Easy Pieces pages 400
@@ -61,58 +59,27 @@ struct PC_Buffer {
     int count;  // the total number of items produced so far within the array
     int array[PC_BUFFER_LEN];  // the actual buffer
 };
-
 struct PC_Buffer pc_buffer;
+char *pc_full_sem_name = "/pc_full_spots_semaphore";
+char *pc_empty_sem_name = "/pc_empty_spots_semaphore";
+char *pc_mutex_sem_name = "/pc_mutex_semaphore";
 
 // given a pc_buffer, initializes its data members
 void init_pc(struct PC_Buffer *buff) {
-    buff->full_spots = sem_open(PC_FULL_SPOTS_SEM, O_CREAT | O_EXCL, 0770, 0);  // # of full spots = zero
-    if(buff->full_spots == SEM_FAILED) {
-        fprintf(stderr, "Error in sem_open %s: %s\n", PC_FULL_SPOTS_SEM, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    buff->empty_spots = sem_open(PC_EMPTY_SPOTS_SEM, O_CREAT | O_EXCL, 0770, PC_BUFFER_LEN);  // empty spots = buff len
-    if(buff->empty_spots == SEM_FAILED) {
-        fprintf(stderr, "Error in sem_open %s: %s\n", PC_EMPTY_SPOTS_SEM, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    buff->mutex = sem_open(PC_MUTEX_SEM, O_CREAT | O_EXCL, 0770, 1);  // binary semaphore (mutex)
-    if(buff->mutex == SEM_FAILED) {
-        fprintf(stderr, "Error in sem_open %s: %s\n", PC_MUTEX_SEM, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    open_sem(&buff->full_spots, pc_full_sem_name, 0);  // # of full spots = zero
+    open_sem(&buff->empty_spots, pc_empty_sem_name, PC_BUFFER_LEN);  // empty spots = buff len
+    open_sem(&buff->mutex, pc_mutex_sem_name, 1);  // binary semaphore (mutex)
     buff->put_index = 0;
     buff->get_index = 0;
     buff->count = 1;
-    memset(buff->array, -1, PC_BUFFER_LEN);
+    memset(buff->array, -1, PC_BUFFER_LEN);  // clear the buffer
 }
 
-// closes all semaphores
+// closes all pc_buffer semaphores
 void destroy_pc(struct PC_Buffer *buff) {
-    if(sem_close(buff->full_spots) == -1) {
-        fprintf(stderr, "Error in sem_close full_spots: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if(sem_close(buff->empty_spots) == -1) {
-        fprintf(stderr, "Error in sem_close empty_spots: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if(sem_close(buff->mutex) == -1) {
-        fprintf(stderr, "Error in sem_close mutex: %s\n", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if(sem_unlink(PC_FULL_SPOTS_SEM) == -1) {
-        fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_FULL_SPOTS_SEM, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if(sem_unlink(PC_EMPTY_SPOTS_SEM) == -1) {
-        fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_EMPTY_SPOTS_SEM, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
-    if(sem_unlink(PC_MUTEX_SEM) == -1) {
-        fprintf(stderr, "Error in sem_unlink %s: %s\n", PC_MUTEX_SEM, strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    destroy_sem(buff->full_spots, pc_full_sem_name);
+    destroy_sem(buff->empty_spots, pc_empty_sem_name);
+    destroy_sem(buff->mutex, pc_mutex_sem_name);
 }
 
 // puts the value onto the queue, in FIFO order
@@ -208,7 +175,7 @@ int run_producer_consumer(int producer_count, int consumer_count) {
 
 
 // --------------------------------------------------------------------------------------------------------------------
-// Dining Philosopher's Problem --------------------------------------------------------------------------------------
+// Dining Philosopher's Problem ---------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 // SOURCE: Adapted from Operating Systems: Three Easy Pieces pages 403+
@@ -219,26 +186,11 @@ sem_t *forks[5];  // semaphores representing the five forks
 char *fork_sems[5] = {"/fork_sem0", "/fork_sem1", "/fork_sem2", "/fork_sem3", "/fork_sem4"}; // semaphore names
 
 void init_fork_semaphores() {
-    for(int i = 0; i < 5; i++) {
-        forks[i] = sem_open(fork_sems[i], O_CREAT | O_EXCL, 0770, 1);  // # of full spots = zero
-        if(forks[i] == SEM_FAILED) {
-            fprintf(stderr, "Error in sem_open %s: %s\n", fork_sems[i], strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-    }
+    for(int i = 0; i < 5; i++)  open_sem(&forks[i], fork_sems[i], 1);
 }
 
 void destroy_fork_semaphores() {
-    for(int i = 0; i < 5; i++) {
-        if(sem_close(forks[i]) == -1) {
-            fprintf(stderr, "Error in sem_close %s: %s\n", fork_sems[i], strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-        if(sem_unlink(fork_sems[i]) == -1) {
-            fprintf(stderr, "Error in sem_unlink %s: %s\n", fork_sems[i], strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-    }
+    for(int i = 0; i < 5; i++)  destroy_sem(forks[i], fork_sems[i]);
 }
 
 // functions to get the left / right fork from a given philosopher
@@ -309,7 +261,7 @@ int run_dining_philosophers() {
 
 
 // --------------------------------------------------------------------------------------------------------------------
-// Brew Master's Problem --------------------------------------------------------------------------------------------
+// Brew Master's Problem ----------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 // necessary semaphores for condition signalling
@@ -358,7 +310,7 @@ void *do_agent_work(void *arg) {
         for(int j = 0; j < RESOURCE_COUNT; j++) {
             // e.g. if this thread is 0 = bezoars, this threads skips 0 but produces 1 and 2
             if(j != missing_resource) {
-                printf("Producing: %s\n", resourceSemNames[j]+1);
+                printf("Agent produced:          %s\n", resourceSemNames[j]+1);
                 fflush(stdout);
                 sem_post(resourceSems[j]);
             }
@@ -392,7 +344,7 @@ void *do_brewer_work(void *arg) {
     int assigned_resource = *(int *)arg;
     for(int i = 0; i < 10; i++) {
         sem_wait(brewersSems[assigned_resource]);
-        printf("--> Potion produced by brewer with: %s\n", resourceSemNames[assigned_resource]+1);
+        printf("Potion by brewer with:   %s\n", resourceSemNames[assigned_resource]+1);
         fflush(stdout);
         sem_post(agentSem);
     }
@@ -401,6 +353,7 @@ void *do_brewer_work(void *arg) {
 
 // run the brewmaster simulation
 int run_brew_master() {
+    printf("Running the brew master simulation. 10 potions of each type will be produced.\n\n");
     init_brewmaster_sems();
     int resource[RESOURCE_COUNT] = {0, 1, 2};  // 0 = bezoars, 1 = unicorn_horns, 2 = mistletoe_berries
     // create all the threads
@@ -422,8 +375,10 @@ int run_brew_master() {
     return EXIT_SUCCESS;
 }
 
+
+
 // --------------------------------------------------------------------------------------------------------------------
-// Main function ----------------------------------------------------------------------------------------------------
+// Main function ------------------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 int exit_and_print_instructions() {
