@@ -21,8 +21,28 @@
 -d: run the dining philosopher's problem\n\
 -b: run the potion brewers problem\n"
 
+#define RESOURCE_COUNT 3
+#define RESOURCE_TOTAL ((RESOURCE_COUNT * (RESOURCE_COUNT-1)) / 2)  // 0 + 1 + 2 = 3 total
+
 extern int errno;
 
+// helper functions to initialize and destroy named semaphores
+void open_sem(sem_t **semaphore, char *name, int init_val) {
+    *semaphore = sem_open(name, O_CREAT | O_EXCL, 0770, init_val);
+    if(*semaphore == SEM_FAILED) {
+        fprintf(stderr, "Error in sem_open %s: %s\n", name, strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+}
+
+void destroy_sem(sem_t *semaphore, char *name) {
+    if(sem_close(semaphore) == -1) {
+        fprintf(stderr, "Error in sem_close %s: %s\n", name, strerror(errno));
+    }
+    if(sem_unlink(name) == -1) {
+        fprintf(stderr, "Error in sem_unlink %s: %s\n", name, strerror(errno));
+    }
+}
 
 // --------------------------------------------------------------------------------------------------------------------
 // Producer Consumer Problem ----------------------------------------------------------------------------------------
@@ -292,12 +312,115 @@ int run_dining_philosophers() {
 // Brew Master's Problem --------------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
-int run_brew_master() {
-    printf("Brew Masters!");
-    return EXIT_SUCCESS;
+// necessary semaphores for condition signalling
+sem_t *agentSem;
+char *agentSemName = "/agent_brewmaster";
+sem_t *resourceSems[RESOURCE_COUNT];
+char *resourceSemNames[RESOURCE_COUNT] = {"/bezoars", "/unicorn_horns", "/mistletoe_berries"};
+sem_t *brewersSems[RESOURCE_COUNT];
+char *brewerSemNames[RESOURCE_COUNT] = {"/bezoars_brewer", "/unicorn_horns_brewer", "/mistletoe_berries_brewer"};
+
+// the state shared by the pusher threads
+sem_t *resourceStateMutex;
+char *resourceStateMutexName = "/pusher_state";
+struct ResourceState {
+    int count;  // e.g. if count = 1, this means only 1 resource has produced; need (3 - count)
+    int total;  // e.g. if total = 2, this means 0 + 2 have produced but (3 - 2) == 1 is missing
+};
+struct ResourceState resourceState = {0, 0};
+
+// functions to initialize and destroy the semaphores
+void init_brewmaster_sems() {
+    open_sem(&agentSem, agentSemName, 1);
+    open_sem(&resourceStateMutex, resourceStateMutexName, 1);
+    for(int i = 0; i < RESOURCE_COUNT; i++) {
+        open_sem(&resourceSems[i], resourceSemNames[i], 0);
+        open_sem(&brewersSems[i], brewerSemNames[i], 0);
+    }
 }
 
+void destroy_brewmaster_sems() {
+    destroy_sem(agentSem, agentSemName);
+    destroy_sem(resourceStateMutex, resourceStateMutexName);
+    for(int i = 0; i < RESOURCE_COUNT; i++) {
+        destroy_sem(resourceSems[i], resourceSemNames[i]);
+        destroy_sem(brewersSems[i], brewerSemNames[i]);
+    }
+}
 
+// main function for agent thread; produces resources of a given type
+// (or rather, produces all resource, except the one which it is explicitly missing)
+void *do_agent_work(void *arg) {
+    int missing_resource = *(int *)arg;
+    for(int i = 0; i < 10; i++) {      // produce 10 times (arbitrarily chosen simulation count)
+        sem_wait(agentSem);
+        usleep(250000);  // sleep .25 seconds (just to make printing of data slower)
+        for(int j = 0; j < RESOURCE_COUNT; j++) {
+            // e.g. if this thread is 0 = bezoars, this threads skips 0 but produces 1 and 2
+            if(j != missing_resource) {
+                printf("Producing: %s\n", resourceSemNames[j]+1);
+                fflush(stdout);
+                sem_post(resourceSems[j]);
+            }
+        }
+    }
+    return NULL;
+}
+
+// main function for pusher thread; wakes up the appropriate brewer depending on which resources agent produces
+void *do_pusher_work(void *arg) {
+    int assigned_resource = *(int *)arg;
+    for(int i = 0; i < (10 * (RESOURCE_COUNT - 1)); i++) {
+        // wait for this resource to be produced by the agent, the update the state of what is "on the table"
+        sem_wait(resourceSems[assigned_resource]);
+        sem_wait(resourceStateMutex);
+        resourceState.count++;
+        resourceState.total += assigned_resource;
+        // if this was the last resource from agent, wake up the brewer with the missing resource and reset state to 0
+        if(resourceState.count == (RESOURCE_COUNT - 1)) {
+            sem_post(brewersSems[RESOURCE_TOTAL - resourceState.total]);
+            resourceState.count = 0;
+            resourceState.total = 0;
+        }
+        sem_post(resourceStateMutex);
+    }
+    return NULL;
+}
+
+// main function for brewer thread; woken up by pusher, produces potion, wakes up agent the next batch of resources
+void *do_brewer_work(void *arg) {
+    int assigned_resource = *(int *)arg;
+    for(int i = 0; i < 10; i++) {
+        sem_wait(brewersSems[assigned_resource]);
+        printf("--> Potion produced by brewer with: %s\n", resourceSemNames[assigned_resource]+1);
+        fflush(stdout);
+        sem_post(agentSem);
+    }
+    return NULL;
+}
+
+// run the brewmaster simulation
+int run_brew_master() {
+    init_brewmaster_sems();
+    int resource[RESOURCE_COUNT] = {0, 1, 2};  // 0 = bezoars, 1 = unicorn_horns, 2 = mistletoe_berries
+    // create all the threads
+    pthread_t agents[RESOURCE_COUNT];  // the agent threads to produce resources
+    pthread_t pushers[RESOURCE_COUNT];  // the pusher threads to interface between agent and brewers
+    pthread_t brewers[RESOURCE_COUNT];  // the brewer threads to produce potions
+    for (int i = 0; i < RESOURCE_COUNT; i++) {
+        pthread_create(&agents[i], NULL, do_agent_work, &resource[i]);
+        pthread_create(&pushers[i], NULL, do_pusher_work, &resource[i]);
+        pthread_create(&brewers[i], NULL, do_brewer_work, &resource[i]);
+    }
+    // join all the threads
+    for (int i = 0; i < RESOURCE_COUNT; i++) {
+        pthread_join(agents[i], NULL);
+        pthread_join(pushers[i], NULL);
+        pthread_join(brewers[i], NULL);
+    }
+    destroy_brewmaster_sems();
+    return EXIT_SUCCESS;
+}
 
 // --------------------------------------------------------------------------------------------------------------------
 // Main function ----------------------------------------------------------------------------------------------------
