@@ -284,10 +284,6 @@ void destroy_fork_semaphores(sem_t *forks[], char *fork_sems[]) {
     for(int i = 0; i < 5; i++)  destroy_sem(forks[i], fork_sems[i]);
 }
 
-// semaphore values
-sem_t *forks[5];  // semaphores representing the five forks
-char *fork_sems[5] = {"/fork_sem0", "/fork_sem1", "/fork_sem2", "/fork_sem3", "/fork_sem4"}; // semaphore names
-
 // functions to acquire and put down the fork semaphores on either side of a philosopher
 void get_forks(int p, sem_t *left_fork, sem_t *right_fork) {
     // to prevent deadlock - need at least one philosopher to acquire forks in different order
@@ -319,25 +315,31 @@ void eat(int p) {
     sleep((rand() % 8) + 2);  // Eating takes a random amount of time in the range of 2-9 seconds.
 }
 
+// functions to get the left / right fork from a given philosopher
+int left(int p) { return p; }
+int right(int p) { return (p + 1) % 5; }
+
+// function to run a philosopher simulation
+void do_philosopher_work(int id, sem_t *left_fork, sem_t *right_fork) {
+    for(int i = 0; i < 5; i++) {
+        think(id);
+        get_forks(id, left_fork, right_fork);
+        eat(id);
+        put_forks(id, left_fork, right_fork);
+    }
+}
+
+// data members necessary for thread implementation
 struct dining_thread_arg {
     int id;
     sem_t *left_fork;
     sem_t *right_fork;
 };
 
-// functions to get the left / right fork from a given philosopher
-int left(int p) { return p; }
-int right(int p) { return (p + 1) % 5; }
-
 // start function for the philosopher threads
-void *do_philosopher_work(void *data) {
+void *do_philosopher_work_thread(void *data) {
     struct dining_thread_arg *arg = (struct dining_thread_arg *)data;
-    for(int i = 0; i < 5; i++) {
-        think(arg->id);
-        get_forks(arg->id, arg->left_fork, arg->right_fork);
-        eat(arg->id);
-        put_forks(arg->id, arg->left_fork, arg->right_fork);
-    }
+    do_philosopher_work(arg->id, arg->left_fork, arg->right_fork);
     return NULL;
 }
 
@@ -357,13 +359,11 @@ int run_dining_philosophers_threads() {
     }
     // create all the threads
     pthread_t philosophers[5];
-    for (int i = 0; i < 5; i++) {
-        pthread_create(&philosophers[i], NULL, do_philosopher_work, &args[i]);
-    }
+    for (int i = 0; i < 5; i++)
+        pthread_create(&philosophers[i], NULL, do_philosopher_work_thread, &args[i]);
     // join all the threads
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 5; i++)
         pthread_join(philosophers[i], NULL);
-    }
     destroy_fork_semaphores(forks, fork_sems);
     return EXIT_SUCCESS;
 }
@@ -371,9 +371,26 @@ int run_dining_philosophers_threads() {
 
 
 // --------------------------------------------------------------------------------------------------------------------
-// Dining Philosopher's Problem:  Threads -----------------------------------------------------------------------------
+// Dining Philosopher's Problem:  Processes ---------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 int run_dining_philosophers_processes() {
+    printf("[PROCESSES] Running Dining Philosopher's simulation. Each will eat 5 times before ending.\n\n");
+    // semaphore values
+    sem_t *forks[5];  // semaphores representing the five forks
+    char *fork_sems[5] = {"/fork_sem0", "/fork_sem1", "/fork_sem2", "/fork_sem3", "/fork_sem4"}; // semaphore names
+    init_fork_semaphores(forks, fork_sems);
+    // create all the processes
+    pid_t philosophers[5];
+    for (int i = 0; i < 5; i++)
+        if((philosophers[i] = fork()) == 0) {
+            do_philosopher_work(i, forks[left(i)], forks[right(i)]);
+            exit(EXIT_SUCCESS);
+        };
+    // wait for all the processes
+    int wstatus;
+    for (int i = 0; i < 5; i++)
+        waitpid(philosophers[i], &wstatus, 0);
+    destroy_fork_semaphores(forks, fork_sems);
     return EXIT_SUCCESS;
 }
 
