@@ -9,9 +9,9 @@
  *  The process version of each can be run using a -proc flag; the thread via -thread
  *
  * EXAMPLE INSTRUCTIONS:
- *  ./bairdjo_hw4.c [-proc/-thread] -p -n 8 -c 2    --> runs producer consumer with 8 producers, 2 consumers
- *  ./bairdjo_hw4.c [-proc/-thread] -d              --> runs dining philosophers
- *  ./bairdjo_hw4.c [-proc/-thread] -b              --> runs potion brewers
+ *  ./bairdjo_hw4 [-proc/-thread] -p -n 3 -c 2    --> runs producer consumer with 3 producers, 2 consumers
+ *  ./bairdjo_hw4 [-proc/-thread] -d              --> runs dining philosophers
+ *  ./bairdjo_hw4 [-proc/-thread] -b              --> runs potion brewers
  */
 
 #include <stdlib.h>
@@ -25,15 +25,20 @@
 #include <errno.h>
 #include <sys/wait.h>
 
-#define INSTRUCTIONS "Instructions:\n\
-first argument: \
-  -proc or -thread to run process or thread version\
-second argument:\
+#define INSTRUCTIONS "Instructions:\n\n\
+first argument:\n\
+  -proc or -thread to run process or thread version\n\
+second argument:\n\
   -p: run the producer/consumer problem\n\
     -n {N}: number of producers (required if using -p)\n\
     -c {C}: number of consumers (required if using -p)\n\
   -d: run the dining philosopher's problem\n\
-  -b: run the potion brewers problem\n"
+  -b: run the potion brewers problem\n\
+examples:\n\
+  ./bairdjo_hw4 -proc -p -n 3 -c 2\n\
+  ./bairdjo_hw4 -thread -d\n\
+  ./bairdjo_hw4 -proc -b\n"
+
 
 #define PC_BUFFER_LEN 10
 
@@ -61,7 +66,6 @@ void destroy_sem(sem_t *semaphore, char *name) {
 }
 
 
-// TODO - check if read() and write() to pipes work differently on little endian system
 
 // --------------------------------------------------------------------------------------------------------------------
 // Producer Consumer Problem:  Processes ------------------------------------------------------------------------------
