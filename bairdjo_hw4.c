@@ -1,3 +1,19 @@
+/*
+ * INSTRUCTIONS TO GRADER:
+ *
+ * TO COMPILE:
+ * gcc --std=gnu99 -Wall -pthread -o bairdjo_hw4 bairdjo_hw4.c
+ *
+ * NOTES & OVERVIEW:
+ *  I implemented each of the three problems with BOTH processes and threads
+ *  The process version of each can be run using a -proc flag; the thread via -thread
+ *
+ * EXAMPLE INSTRUCTIONS:
+ *  ./bairdjo_hw4.c [-proc/-thread] -p -n 8 -c 2    --> runs producer consumer with 8 producers, 2 consumers
+ *  ./bairdjo_hw4.c [-proc/-thread] -d              --> runs dining philosophers
+ *  ./bairdjo_hw4.c [-proc/-thread] -b              --> runs potion brewers
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -9,11 +25,14 @@
 #include <errno.h>
 
 #define INSTRUCTIONS "Instructions:\n\
--p: run the producer/consumer problem\n\
-  -n {N}: number of producers (required if using -p)\n\
-  -c {C}: number of consumers (required if using -p)\n\
--d: run the dining philosopher's problem\n\
--b: run the potion brewers problem\n"
+first argument: \
+  -proc or -thread to run process or thread version\
+second argument:\
+  -p: run the producer/consumer problem\n\
+    -n {N}: number of producers (required if using -p)\n\
+    -c {C}: number of consumers (required if using -p)\n\
+  -d: run the dining philosopher's problem\n\
+  -b: run the potion brewers problem\n"
 
 #define PC_BUFFER_LEN 10
 
@@ -43,7 +62,84 @@ void destroy_sem(sem_t *semaphore, char *name) {
 
 
 // --------------------------------------------------------------------------------------------------------------------
-// Producer Consumer Problem ------------------------------------------------------------------------------------------
+// Producer Consumer Problem:  Processes ------------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
+// arguments for the process start functions
+struct pc_process_args {
+    int id;
+    int producer_loops;
+    int consumer_loops;
+    int pipeFD;
+};
+
+// initializes the producer consumer process arguments
+void init_pc_process_args(struct pc_process_args *args, int id, int producer_loops, int consumer_loops, int fd) {
+    args->id = id;
+    args->producer_loops = producer_loops;
+    args->consumer_loops = consumer_loops;
+    args->pipeFD = fd;
+}
+
+// main function for producer processes
+void do_process_producer_work(struct pc_process_args *args) {
+    int val;
+    for (int i = 0; i < args->producer_loops; i++) {
+        sleep(rand() % 3);  // sleep between 0 and 2 seconds
+        val = (args->id * 1000) + i + 1;  // ie: 9012 represents 12th item produced by process #9
+        write(args->pipeFD, (void *)&val, sizeof(int));  // write val into the pipe
+        printf("producer %d put:     %d\n", args->id, val);
+        fflush(stdout);  // immediately flush the output; occasionally there is still a lag though
+    }
+    exit(EXIT_SUCCESS);
+}
+
+// main function for queue producer process
+void do_process_consumer_work(struct pc_process_args *args) {
+    int val;
+    for (int i = 0; i < args->consumer_loops; i++) {
+        sleep(rand() % 3);  // sleep between 0 and 2 seconds
+        read(args->pipeFD, &val, sizeof(int));  // write val into the pipe
+        printf("consumer %d got:           %d\n", args->id, val);
+        fflush(stdout);  // immediately flush the output; occasionally there is still a lag though
+    }
+    exit(EXIT_SUCCESS);
+}
+
+
+
+int run_pc_processes(int producer_count, int consumer_count) {
+    printf("[PROCESSES] Running Producer/Consumer simulation with %d producers, %d consumers.\n\n", producer_count, consumer_count);
+    // initialize the simulation arguments
+    int pipeFDs[2]; // pipeFDs[0] is read, pipeFDs[1] is write
+    if (pipe(pipeFDs) == -1) {
+        printf("Call to pipe() failed\n");
+        exit(EXIT_FAILURE);
+    }
+    pid_t producers[producer_count];
+    pid_t consumers[consumer_count];
+    struct pc_process_args args;
+    // create all the processes
+    for (int i = 0; i < producer_count; i++) {
+        init_pc_process_args(&args, i + 1, consumer_count * 3, producer_count * 3, pipeFDs[1]);
+        if((producers[i] = fork()) == 0) do_process_producer_work(&args);
+    }
+    for (int i = 0; i < consumer_count; i++) {
+        init_pc_process_args(&args, i + 1, consumer_count * 3, producer_count * 3, pipeFDs[0]);
+        if((consumers[i] = fork()) == 0) do_process_consumer_work(&args);
+    }
+    // wait for all processes
+    int wstatus;
+    for (int i = 0; i < producer_count; i++)
+        waitpid(producers[i], &wstatus, 0);
+    for (int i = 0; i < consumer_count; i++)
+        waitpid(consumers[i], &wstatus, 0);
+    return EXIT_SUCCESS;
+}
+
+
+
+// --------------------------------------------------------------------------------------------------------------------
+// Producer Consumer Problem:  Threads --------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 // SOURCE: Adapted from Operating Systems: Three Easy Pieces pages 400
@@ -148,10 +244,9 @@ void init_pc_thread_args(struct pc_thread_args *args, int id, int producer_loops
 }
 
 // run the producer consumer queue simulation
-int run_producer_consumer(int producer_count, int consumer_count) {
-    printf("Running Producer/Consumer simulation with %d producers, %d consumers.\n\n", producer_count, consumer_count);
+int run_pc_threads(int producer_count, int consumer_count) {
+    printf("[THREADS] Running Producer/Consumer simulation with %d producers, %d consumers.\n\n", producer_count, consumer_count);
     // initialize the simulation arguments
-    srand(time(NULL));
     init_pc(&pc_buffer);
     pthread_t producer_threads[producer_count];
     pthread_t consumer_threads[consumer_count];
@@ -390,18 +485,33 @@ int exit_and_print_instructions() {
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 2)
+    srand(time(NULL));
+    if (argc < 3)
         return exit_and_print_instructions();
-    // consumer producer problem
-    if(strncmp(argv[1], "-p", 2) == 0) {
-        if(argc < 6)
+    // first flag must be -proc or -thread
+    int is_thread;
+    if(strncmp(argv[1], "-thread", 7) == 0) {
+        is_thread = 1;
+    } else if (strncmp(argv[1], "-proc", 5) == 0) {
+        is_thread = 0;
+    } else {
+        return exit_and_print_instructions();
+    }
+    // next flags are for problem type
+    if(strncmp(argv[2], "-p", 2) == 0) {
+        // consumer producer problem
+        if(argc < 7)
             return exit_and_print_instructions();
-        if(strncmp(argv[2], "-n", 2) != 0 || strncmp(argv[4], "-c", 2) != 0)
+        if(strncmp(argv[3], "-n", 2) != 0 || strncmp(argv[5], "-c", 2) != 0)
             return exit_and_print_instructions();
-        return run_producer_consumer(atoi(argv[3]), atoi(argv[5]));
-    } else if (strncmp(argv[1], "-d", 2) == 0) {
+        int producers = atoi(argv[4]);
+        int consumers = atoi(argv[6]);
+        return is_thread ? run_pc_threads(producers, consumers) : run_pc_processes(producers, consumers);
+    } else if (strncmp(argv[2], "-d", 2) == 0) {
+        // dining philosophers
         return run_dining_philosophers();
-    } else if (strncmp(argv[1], "-b", 2) == 0) {
+    } else if (strncmp(argv[2], "-b", 2) == 0) {
+        //
         return run_brew_master();
     } else {
         return exit_and_print_instructions();
