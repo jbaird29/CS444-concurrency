@@ -23,6 +23,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <errno.h>
+#include <sys/wait.h>
 
 #define INSTRUCTIONS "Instructions:\n\
 first argument: \
@@ -169,7 +170,7 @@ void init_pc(struct PC_Buffer *buff) {
     buff->put_index = 0;
     buff->get_index = 0;
     buff->count = 1;
-    memset(buff->array, -1, PC_BUFFER_LEN);  // clear the buffer
+    memset(buff->array, -1, PC_BUFFER_LEN * sizeof(int));  // clear the buffer
 }
 
 // closes all pc_buffer semaphores
