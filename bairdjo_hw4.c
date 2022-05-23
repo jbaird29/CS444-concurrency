@@ -60,6 +60,7 @@ void destroy_sem(sem_t *semaphore, char *name) {
 }
 
 
+// TODO - check if read() and write() to pipes work differently on little endian system
 
 // --------------------------------------------------------------------------------------------------------------------
 // Producer Consumer Problem:  Processes ------------------------------------------------------------------------------
@@ -320,13 +321,14 @@ int left(int p) { return p; }
 int right(int p) { return (p + 1) % 5; }
 
 // function to run a philosopher simulation
-void do_philosopher_work(int id, sem_t *left_fork, sem_t *right_fork) {
+int do_philosopher_work(int id, sem_t *left_fork, sem_t *right_fork) {
     for(int i = 0; i < 5; i++) {
         think(id);
         get_forks(id, left_fork, right_fork);
         eat(id);
         put_forks(id, left_fork, right_fork);
     }
+    return EXIT_SUCCESS;
 }
 
 // data members necessary for thread implementation
@@ -382,10 +384,8 @@ int run_dining_philosophers_processes() {
     // create all the processes
     pid_t philosophers[5];
     for (int i = 0; i < 5; i++)
-        if((philosophers[i] = fork()) == 0) {
-            do_philosopher_work(i, forks[left(i)], forks[right(i)]);
-            exit(EXIT_SUCCESS);
-        };
+        if((philosophers[i] = fork()) == 0)
+            return do_philosopher_work(i, forks[left(i)], forks[right(i)]);
     // wait for all the processes
     int wstatus;
     for (int i = 0; i < 5; i++)
@@ -444,8 +444,7 @@ void destroy_brewmaster_sems(struct brewmaster_sems *sems) {
 
 // main function for agent thread; produces resources of a given type
 // (or rather, produces all resource, except the one which it is explicitly missing)
-void *do_agent_work(void *arg) {
-    int missing_resource = *(int *)arg;
+int do_agent_work(int missing_resource) {
     for(int i = 0; i < 10; i++) {      // produce 10 times (arbitrarily chosen simulation count)
         sem_wait(sems.agentSem);
         usleep(250000);  // sleep .25 seconds (just to make printing of data slower)
@@ -458,12 +457,17 @@ void *do_agent_work(void *arg) {
             }
         }
     }
+    return EXIT_SUCCESS;
+}
+void *do_agent_work_threads(void *arg) {
+    int missing_resource = *(int *)arg;
+    do_agent_work(missing_resource);
     return NULL;
 }
 
+
 // main function for pusher thread; wakes up the appropriate brewer depending on which resources agent produces
-void *do_pusher_work(void *arg) {
-    int assigned_resource = *(int *)arg;
+int do_pusher_work(int assigned_resource) {
     for(int i = 0; i < (10 * (RESOURCE_COUNT - 1)); i++) {
         // wait for this resource to be produced by the agent, the update the state of what is "on the table"
         sem_wait(sems.resourceSems[assigned_resource]);
@@ -478,24 +482,33 @@ void *do_pusher_work(void *arg) {
         }
         sem_post(sems.resourceStateMutex);
     }
+    return EXIT_SUCCESS;
+}
+void *do_pusher_work_threads(void *arg) {
+    int assigned_resource = *(int *)arg;
+    do_pusher_work(assigned_resource);
     return NULL;
 }
 
 // main function for brewer thread; woken up by pusher, produces potion, wakes up agent the next batch of resources
-void *do_brewer_work(void *arg) {
-    int assigned_resource = *(int *)arg;
+int do_brewer_work(int assigned_resource) {
     for(int i = 0; i < 10; i++) {
         sem_wait(sems.brewersSems[assigned_resource]);
         printf("Potion by brewer with:   %s\n", sems.resourceSemNames[assigned_resource]+1);
         fflush(stdout);
         sem_post(sems.agentSem);
     }
+    return EXIT_SUCCESS;
+}
+void *do_brewer_work_threads(void *arg) {
+    int assigned_resource = *(int *)arg;
+    do_brewer_work(assigned_resource);
     return NULL;
 }
 
 // run the brewmaster simulation
 int run_brew_master_threads() {
-    printf("Running the brew master simulation. 10 potions of each type will be produced.\n\n");
+    printf("[THREADS] Running the brew master simulation. 10 potions of each type will be produced.\n\n");
     init_brewmaster_sems(&sems);
     int resource[RESOURCE_COUNT] = {0, 1, 2};  // 0 = bezoars, 1 = unicorn_horns, 2 = mistletoe_berries
     // create all the threads
@@ -503,9 +516,9 @@ int run_brew_master_threads() {
     pthread_t pushers[RESOURCE_COUNT];  // the pusher threads to interface between agent and brewers
     pthread_t brewers[RESOURCE_COUNT];  // the brewer threads to produce potions
     for (int i = 0; i < RESOURCE_COUNT; i++) {
-        pthread_create(&agents[i], NULL, do_agent_work, &resource[i]);
-        pthread_create(&pushers[i], NULL, do_pusher_work, &resource[i]);
-        pthread_create(&brewers[i], NULL, do_brewer_work, &resource[i]);
+        pthread_create(&agents[i], NULL, do_agent_work_threads, &resource[i]);
+        pthread_create(&pushers[i], NULL, do_pusher_work_threads, &resource[i]);
+        pthread_create(&brewers[i], NULL, do_brewer_work_threads, &resource[i]);
     }
     // join all the threads
     for (int i = 0; i < RESOURCE_COUNT; i++) {
@@ -522,7 +535,64 @@ int run_brew_master_threads() {
 // --------------------------------------------------------------------------------------------------------------------
 // Brew Master's Problem: Processes -----------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
+int do_agent_work_processes(int missing_resource) {return do_agent_work(missing_resource);}
+int do_brewer_work_processes(int assigned_resource) {return do_brewer_work(assigned_resource);}
+int do_pusher_work_processes(int assigned_resource, int pipeFD) {
+    // wait for this resource to be produced by the agent, then push the resource into the pipe
+    for(int i = 0; i < (10 * (RESOURCE_COUNT - 1)); i++) {
+        sem_wait(sems.resourceSems[assigned_resource]);
+        write(pipeFD, (void *)&assigned_resource, sizeof(int));
+    }
+    return EXIT_SUCCESS;
+}
+int do_aggregator_work_processes(int pipeFD) {
+    // read the resources from the pipe, when a pair is found, signal the brewing w/ missing resource
+    int count = 0;
+    int total = 0;
+    int produced_resource = 0;
+    for(int i = 0; i < (10 * (RESOURCE_COUNT - 1) * RESOURCE_COUNT); i++) {
+        read(pipeFD, &produced_resource, sizeof(int));
+        count++;
+        total += produced_resource;
+        // if this was the 2nd resource, wake up the brewer with the missing resource and reset state to 0
+        if(count == (RESOURCE_COUNT - 1)) {
+            sem_post(sems.brewersSems[RESOURCE_TOTAL - total]);
+            count = 0;
+            total = 0;
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
 int run_brew_master_processes() {
+    printf("[PROCESSES] Running the brew master simulation. 10 potions of each type will be produced.\n\n");
+    init_brewmaster_sems(&sems);
+    // create pipe which is used to transfer resource from the pushers to the aggregator
+    int pipeFDs[2]; // pipeFDs[0] is read, pipeFDs[1] is write
+    if (pipe(pipeFDs) == -1) {
+        printf("Call to pipe() failed\n");
+        exit(EXIT_FAILURE);
+    }
+    // create all the processes
+    pid_t agents[RESOURCE_COUNT];  // the agent to produce resources
+    pid_t pushers[RESOURCE_COUNT];  // the pusher to interface between agent and brewers
+    pid_t brewers[RESOURCE_COUNT];  // the brewer to produce potions
+    pid_t aggregator;
+    for (int i = 0; i < RESOURCE_COUNT; i++) {
+        if((agents[i] = fork()) == 0) return do_agent_work_processes(i);
+        if((pushers[i] = fork()) == 0) return do_pusher_work_processes(i, pipeFDs[1]);
+        if((brewers[i] = fork()) == 0) return do_brewer_work_processes(i);
+    }
+    if((aggregator = fork()) == 0) return do_aggregator_work_processes(pipeFDs[0]);
+    // wait for all processes
+    int wstatus;
+    for (int i = 0; i < RESOURCE_COUNT; i++) {
+        waitpid(agents[i], &wstatus, 0);
+        waitpid(pushers[i], &wstatus, 0);
+        waitpid(brewers[i], &wstatus, 0);
+    }
+    waitpid(aggregator, &wstatus, 0);
+    destroy_brewmaster_sems(&sems);
     return EXIT_SUCCESS;
 }
 
