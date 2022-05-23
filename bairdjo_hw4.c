@@ -270,45 +270,41 @@ int run_pc_threads(int producer_count, int consumer_count) {
 
 
 // --------------------------------------------------------------------------------------------------------------------
-// Dining Philosopher's Problem ---------------------------------------------------------------------------------------
+// Dining Philosopher's Problem:  Threads -----------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 // SOURCE: Adapted from Operating Systems: Three Easy Pieces pages 403+
 // DATE: 5/19/2022
 
+void init_fork_semaphores(sem_t *forks[], char *fork_sems[]) {
+    for(int i = 0; i < 5; i++)  open_sem(&forks[i], fork_sems[i], 1);
+}
+
+void destroy_fork_semaphores(sem_t *forks[], char *fork_sems[]) {
+    for(int i = 0; i < 5; i++)  destroy_sem(forks[i], fork_sems[i]);
+}
+
 // semaphore values
 sem_t *forks[5];  // semaphores representing the five forks
 char *fork_sems[5] = {"/fork_sem0", "/fork_sem1", "/fork_sem2", "/fork_sem3", "/fork_sem4"}; // semaphore names
 
-void init_fork_semaphores() {
-    for(int i = 0; i < 5; i++)  open_sem(&forks[i], fork_sems[i], 1);
-}
-
-void destroy_fork_semaphores() {
-    for(int i = 0; i < 5; i++)  destroy_sem(forks[i], fork_sems[i]);
-}
-
-// functions to get the left / right fork from a given philosopher
-int left(int p) { return p; }
-int right(int p) { return (p + 1) % 5; }
-
 // functions to acquire and put down the fork semaphores on either side of a philosopher
-void get_forks(int p) {
+void get_forks(int p, sem_t *left_fork, sem_t *right_fork) {
     // to prevent deadlock - need at least one philosopher to acquire forks in different order
     printf("Philosopher %d is acquiring forks...\n", p);
     fflush(stdout);
     if(p == 4) {
-        sem_wait(forks[right(p)]);
-        sem_wait(forks[left(p)]);
+        sem_wait(right_fork);
+        sem_wait(left_fork);
     } else {
-        sem_wait(forks[left(p)]);
-        sem_wait(forks[right(p)]);
+        sem_wait(left_fork);
+        sem_wait(right_fork);
     }
 }
 
-void put_forks(int p) {
-    sem_post(forks[left(p)]);
-    sem_post(forks[right(p)]);
+void put_forks(int p, sem_t *left_fork, sem_t *right_fork) {
+    sem_post(left_fork);
+    sem_post(right_fork);
 }
 
 // think and eat are simulating by sleeping
@@ -323,37 +319,63 @@ void eat(int p) {
     sleep((rand() % 8) + 2);  // Eating takes a random amount of time in the range of 2-9 seconds.
 }
 
+struct dining_thread_arg {
+    int id;
+    sem_t *left_fork;
+    sem_t *right_fork;
+};
+
+// functions to get the left / right fork from a given philosopher
+int left(int p) { return p; }
+int right(int p) { return (p + 1) % 5; }
+
 // start function for the philosopher threads
-void *do_philosopher_work(void *arg) {
-    int p = *(int *)arg;
+void *do_philosopher_work(void *data) {
+    struct dining_thread_arg *arg = (struct dining_thread_arg *)data;
     for(int i = 0; i < 5; i++) {
-        think(p);
-        get_forks(p);
-        eat(p);
-        put_forks(p);
+        think(arg->id);
+        get_forks(arg->id, arg->left_fork, arg->right_fork);
+        eat(arg->id);
+        put_forks(arg->id, arg->left_fork, arg->right_fork);
     }
     return NULL;
 }
 
 // run the dining philosopher simulation
-int run_dining_philosophers() {
-    printf("Running Dining Philosopher's simulation. Each will eat 5 times before ending.\n\n");
-    init_fork_semaphores();
-    pthread_t philosophers[5];
+int run_dining_philosophers_threads() {
+    printf("[THREADS] Running Dining Philosopher's simulation. Each will eat 5 times before ending.\n\n");
+    // initialize the arguments
+    sem_t *forks[5];  // semaphores representing the five forks
+    char *fork_sems[5] = {"/fork_sem0", "/fork_sem1", "/fork_sem2", "/fork_sem3", "/fork_sem4"}; // semaphore names
+    init_fork_semaphores(forks, fork_sems);
+    // initialize the arguments
+    struct dining_thread_arg args[5];
+    for(int i = 0; i < 5; i++) {
+        args[i].id = i;
+        args[i].left_fork = forks[left(i)];
+        args[i].right_fork = forks[right(i)];
+    }
     // create all the threads
-    int p_index[5] = {0, 1, 2, 3, 4};
+    pthread_t philosophers[5];
     for (int i = 0; i < 5; i++) {
-        pthread_create(&philosophers[i], NULL, do_philosopher_work, &p_index[i]);
+        pthread_create(&philosophers[i], NULL, do_philosopher_work, &args[i]);
     }
     // join all the threads
     for (int i = 0; i < 5; i++) {
         pthread_join(philosophers[i], NULL);
     }
-    destroy_fork_semaphores();
+    destroy_fork_semaphores(forks, fork_sems);
     return EXIT_SUCCESS;
 }
 
 
+
+// --------------------------------------------------------------------------------------------------------------------
+// Dining Philosopher's Problem:  Threads -----------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
+int run_dining_philosophers_processes() {
+    return EXIT_SUCCESS;
+}
 
 // --------------------------------------------------------------------------------------------------------------------
 // Brew Master's Problem ----------------------------------------------------------------------------------------------
@@ -509,7 +531,7 @@ int main(int argc, char *argv[]) {
         return is_thread ? run_pc_threads(producers, consumers) : run_pc_processes(producers, consumers);
     } else if (strncmp(argv[2], "-d", 2) == 0) {
         // dining philosophers
-        return run_dining_philosophers();
+        return is_thread ? run_dining_philosophers_threads() : run_dining_philosophers_processes();
     } else if (strncmp(argv[2], "-b", 2) == 0) {
         //
         return run_brew_master();
