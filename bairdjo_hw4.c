@@ -395,45 +395,50 @@ int run_dining_philosophers_processes() {
 }
 
 // --------------------------------------------------------------------------------------------------------------------
-// Brew Master's Problem ----------------------------------------------------------------------------------------------
+// Brew Master's Problem: Threads -------------------------------------------------------------------------------------
 // --------------------------------------------------------------------------------------------------------------------
 
 // ADAPTED FROM: The Little Book of Semaphores  DATE: 5/22/2022
 // URL: https://www.greenteapress.com/semaphores/LittleBookOfSemaphores.pdf
 
 // necessary semaphores for condition signalling
-sem_t *agentSem;
-char *agentSemName = "/agent_brewmaster";
-sem_t *resourceSems[RESOURCE_COUNT];
-char *resourceSemNames[RESOURCE_COUNT] = {"/bezoars", "/unicorn_horns", "/mistletoe_berries"};
-sem_t *brewersSems[RESOURCE_COUNT];
-char *brewerSemNames[RESOURCE_COUNT] = {"/bezoars_brewer", "/unicorn_horns_brewer", "/mistletoe_berries_brewer"};
+struct brewmaster_sems {
+    sem_t *agentSem;
+    char *agentSemName;
+    sem_t *resourceSems[RESOURCE_COUNT];
+    char *resourceSemNames[RESOURCE_COUNT];
+    sem_t *brewersSems[RESOURCE_COUNT];
+    char *brewerSemNames[RESOURCE_COUNT];
+    sem_t *resourceStateMutex;
+    char *resourceStateMutexName;
+} sems = {
+        .agentSemName = "/agent_brewmaster",
+        .resourceSemNames = {"/bezoars", "/unicorn_horns", "/mistletoe_berries"},
+        .brewerSemNames = {"/bezoars_brewer", "/unicorn_horns_brewer", "/mistletoe_berries_brewer"},
+        .resourceStateMutexName = "/pusher_state"
+};;
 
-// the state shared by the pusher threads
-sem_t *resourceStateMutex;
-char *resourceStateMutexName = "/pusher_state";
 struct ResourceState {
     int count;  // e.g. if count = 1, this means only 1 resource has produced; need (3 - count)
     int total;  // e.g. if total = 2, this means 0 + 2 have produced but (3 - 2) == 1 is missing
-};
-struct ResourceState resourceState = {0, 0};
+} resourceState = {0, 0};
 
 // functions to initialize and destroy the semaphores
-void init_brewmaster_sems() {
-    open_sem(&agentSem, agentSemName, 1);
-    open_sem(&resourceStateMutex, resourceStateMutexName, 1);
+void init_brewmaster_sems(struct brewmaster_sems *sems) {
+    open_sem(&sems->agentSem, sems->agentSemName, 1);
+    open_sem(&sems->resourceStateMutex, sems->resourceStateMutexName, 1);
     for(int i = 0; i < RESOURCE_COUNT; i++) {
-        open_sem(&resourceSems[i], resourceSemNames[i], 0);
-        open_sem(&brewersSems[i], brewerSemNames[i], 0);
+        open_sem(&sems->resourceSems[i], sems->resourceSemNames[i], 0);
+        open_sem(&sems->brewersSems[i], sems->brewerSemNames[i], 0);
     }
 }
 
-void destroy_brewmaster_sems() {
-    destroy_sem(agentSem, agentSemName);
-    destroy_sem(resourceStateMutex, resourceStateMutexName);
+void destroy_brewmaster_sems(struct brewmaster_sems *sems) {
+    destroy_sem(sems->agentSem, sems->agentSemName);
+    destroy_sem(sems->resourceStateMutex, sems->resourceStateMutexName);
     for(int i = 0; i < RESOURCE_COUNT; i++) {
-        destroy_sem(resourceSems[i], resourceSemNames[i]);
-        destroy_sem(brewersSems[i], brewerSemNames[i]);
+        destroy_sem(sems->resourceSems[i], sems->resourceSemNames[i]);
+        destroy_sem(sems->brewersSems[i], sems->brewerSemNames[i]);
     }
 }
 
@@ -442,14 +447,14 @@ void destroy_brewmaster_sems() {
 void *do_agent_work(void *arg) {
     int missing_resource = *(int *)arg;
     for(int i = 0; i < 10; i++) {      // produce 10 times (arbitrarily chosen simulation count)
-        sem_wait(agentSem);
+        sem_wait(sems.agentSem);
         usleep(250000);  // sleep .25 seconds (just to make printing of data slower)
         for(int j = 0; j < RESOURCE_COUNT; j++) {
             // e.g. if this thread is 0 = bezoars, this threads skips 0 but produces 1 and 2
             if(j != missing_resource) {
-                printf("Agent produced:          %s\n", resourceSemNames[j]+1);
+                printf("Agent produced:          %s\n", sems.resourceSemNames[j]+1);
                 fflush(stdout);
-                sem_post(resourceSems[j]);
+                sem_post(sems.resourceSems[j]);
             }
         }
     }
@@ -461,17 +466,17 @@ void *do_pusher_work(void *arg) {
     int assigned_resource = *(int *)arg;
     for(int i = 0; i < (10 * (RESOURCE_COUNT - 1)); i++) {
         // wait for this resource to be produced by the agent, the update the state of what is "on the table"
-        sem_wait(resourceSems[assigned_resource]);
-        sem_wait(resourceStateMutex);
+        sem_wait(sems.resourceSems[assigned_resource]);
+        sem_wait(sems.resourceStateMutex);
         resourceState.count++;
         resourceState.total += assigned_resource;
         // if this was the last resource from agent, wake up the brewer with the missing resource and reset state to 0
         if(resourceState.count == (RESOURCE_COUNT - 1)) {
-            sem_post(brewersSems[RESOURCE_TOTAL - resourceState.total]);
+            sem_post(sems.brewersSems[RESOURCE_TOTAL - resourceState.total]);
             resourceState.count = 0;
             resourceState.total = 0;
         }
-        sem_post(resourceStateMutex);
+        sem_post(sems.resourceStateMutex);
     }
     return NULL;
 }
@@ -480,18 +485,18 @@ void *do_pusher_work(void *arg) {
 void *do_brewer_work(void *arg) {
     int assigned_resource = *(int *)arg;
     for(int i = 0; i < 10; i++) {
-        sem_wait(brewersSems[assigned_resource]);
-        printf("Potion by brewer with:   %s\n", resourceSemNames[assigned_resource]+1);
+        sem_wait(sems.brewersSems[assigned_resource]);
+        printf("Potion by brewer with:   %s\n", sems.resourceSemNames[assigned_resource]+1);
         fflush(stdout);
-        sem_post(agentSem);
+        sem_post(sems.agentSem);
     }
     return NULL;
 }
 
 // run the brewmaster simulation
-int run_brew_master() {
+int run_brew_master_threads() {
     printf("Running the brew master simulation. 10 potions of each type will be produced.\n\n");
-    init_brewmaster_sems();
+    init_brewmaster_sems(&sems);
     int resource[RESOURCE_COUNT] = {0, 1, 2};  // 0 = bezoars, 1 = unicorn_horns, 2 = mistletoe_berries
     // create all the threads
     pthread_t agents[RESOURCE_COUNT];  // the agent threads to produce resources
@@ -508,7 +513,16 @@ int run_brew_master() {
         pthread_join(pushers[i], NULL);
         pthread_join(brewers[i], NULL);
     }
-    destroy_brewmaster_sems();
+    destroy_brewmaster_sems(&sems);
+    return EXIT_SUCCESS;
+}
+
+
+
+// --------------------------------------------------------------------------------------------------------------------
+// Brew Master's Problem: Processes -----------------------------------------------------------------------------------
+// --------------------------------------------------------------------------------------------------------------------
+int run_brew_master_processes() {
     return EXIT_SUCCESS;
 }
 
@@ -551,7 +565,7 @@ int main(int argc, char *argv[]) {
         return is_thread ? run_dining_philosophers_threads() : run_dining_philosophers_processes();
     } else if (strncmp(argv[2], "-b", 2) == 0) {
         //
-        return run_brew_master();
+        return is_thread ? run_brew_master_threads() : run_brew_master_processes();
     } else {
         return exit_and_print_instructions();
     }
